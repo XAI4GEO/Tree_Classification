@@ -1,0 +1,11 @@
+name: tree-classification
+channels:
+  - conda-forge
+dependencies:
+  - deepforest
+  - geopandas
+  - jupyterlab
+  - matplotlib
+  - rioxarray
+  - scikit-image
+  - tensorflow
