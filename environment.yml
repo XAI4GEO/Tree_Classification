@@ -2,10 +2,15 @@ name: tree-classification
 channels:
   - conda-forge
 dependencies:
+  - keras 
   - deepforest
   - geopandas
   - jupyterlab
+  - laspy
   - matplotlib
   - rioxarray
   - scikit-image
-  - tensorflow
+  - zarr
+  - pip
+  - pip:
+    - tensorflow
