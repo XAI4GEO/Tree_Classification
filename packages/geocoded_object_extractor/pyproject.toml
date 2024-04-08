@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geocoded_object_extractor"
+description = "Geocoded Object Extractor"
+version = "0.1.0"
+readme = "README.md"
+license = { text = "Apache 2.0" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Intended Audience :: Science/Research",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "rioxarray",
+    "scikit-image",
+    "scikit-learn",
+    "xarray",
+]
