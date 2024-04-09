@@ -1,139 +1,185 @@
+import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rioxarray
-import skimage.transform
+import shapely
 import xarray as xr
 
 from rioxarray.exceptions import NoDataInBounds
 from sklearn.preprocessing import LabelEncoder
 
 
-class TreeDataset:
+class ObjectExtractor:
     """
-    Extract tree crown images from one or more rasters using
-    contour boundaries.
+    Extract geocoded objects from one or more raster datasets using
+    the provided contour boundaries.
 
     Args:
-        rgbs: RGB images where to extract the tree crowns from,
+        images: raster images where to extract the objects from,
             provided as a list of paths or xarray DataArray objects.
-        bboxes: shapes of the individual tree crowns, provided as
-            a geopandas GeoDataFrame object (indices should match the
-            DataFrame used to provide classes).
-        classes: classification of the tree crowns, provided as a
-            pandas DataFrame (indices should match the GeoDataFrame
-            used to provide tree crown shapes).
-        min_pixel_size: side of the smallest cutout in pixel (smaller
-            cutouts will be discarded).
-        max_pixel_size: side of the largest cutout in pixel (larger
-            cutouts will be discarded).
-        pixel_size: cutouts will be padded to a square image of the
-            given side. It should be greater than or equal to
-            max_pixel_size.
-        min_sample_size: classes with less samples than the given
+        geoms: geometries of the objects, provided as a list of polygons,
+            points, bounds or as a geopandas GeoSeries. If points are
+            provided, the `buffer` argument must be provided. Geometries
+            are expexcted to be in the same CRS as the images. Indices
+            should match the ones of `classes`.
+        labels (optional): object labels, provided as a list or as a
+            pandas Series. Indices should match the ones of `objects`.
+        buffer (optional): buffer width applied to the geometries, in local
+            CRS units.
+        min_pixel_size (optional): side (in pixel) of the smallest cutout
+            (smaller cutouts will be discarded).
+        max_pixel_size (optional):  side (in pixel) of the largest cutout
+            (larger cutouts will be discarded).
+        pixel_size (optional): cutouts will be padded to a square image
+            of the given side (in pixel). If provided, it should be greater
+            than or equal to max_pixel_size.
+        min_sample_size (optional): classes with less samples than the given
             amount will be discarded.
-        augment_data: whether to perform data augmentation by rotation
-            (90, 180 and 270 degrees) and mirroring.
+        encode_labels (optional): whether to normalize and convert
+            non-numerical labels to numerical labels.
     """
     def __init__(
             self,
-            rgbs,
-            bboxes,
-            classes,
-            min_pixel_size=32,
-            max_pixel_size=100,
-            pixel_size=100,
-            min_sample_size=10,
-            augment_data=False
+            images,
+            geoms,
+            labels=None,
+            buffer=None,
+            min_pixel_size=None,
+            max_pixel_size=None,
+            pixel_size=None,
+            min_sample_size=None,
+            encode_labels=True,
     ):
-        self.rgbs = rgbs
-        self.bboxes = bboxes
-        self.classes = classes
+        self.images = images
+        labels = np.zeros(len(geoms), dtype=int) if labels is None else labels
+        geometry = _normalize_geoms(geoms, buffer)
+        self.labels = gpd.GeoDataFrame({'label': labels}, geometry=geometry)
 
         self.min_pixel_size = min_pixel_size
         self.max_pixel_size = max_pixel_size
         self.pixel_size = pixel_size
         self.min_sample_size = min_sample_size
 
-        self.augment_data = augment_data
+        self.encode_labels = encode_labels
 
-    def _generate_cutouts_for_image(self, rgb):
-        """ Extract all cutouts for a given image. """
+    def _generate_cutouts_for_image(self, image):
+        """ Extract all cutouts from a given image. """
 
-        if not isinstance(rgb, xr.DataArray):
-            rgb = rioxarray.open_rasterio(rgb, masked=True)
+        if not isinstance(image, xr.DataArray):
+            image = rioxarray.open_rasterio(image, masked=True)
 
-        assert self.bboxes.crs == rgb.rio.crs
+        if self.labels.crs is None:
+            # if labels don't have a CRS, assume it's the correct one
+            self.labels.set_crs(image.rio.crs)
+        else:
+            assert self.labels.crs == image.rio.crs
 
-        # select relevant bboxes
-        xmin, ymin, xmax, ymax = rgb.rio.bounds()
-        bboxes_clip = self.bboxes.cx[xmin:xmax, ymin:ymax]
-        bboxes_clip = bboxes_clip[~bboxes_clip.is_empty]
+        # select relevant objects
+        xmin, ymin, xmax, ymax = image.rio.bounds()
+        labels_clip = self.labels.cx[xmin:xmax, ymin:ymax]
+        labels_clip = labels_clip[~labels_clip.is_empty]
 
-        for id, bbox in bboxes_clip.items():
+        for el in labels_clip.itertuples():
 
-            # some polygons may have very small intersections
             try:
                 # First clip with bounding box:
                 # it is more efficient to first do the cropping based
                 # on the bounds and then use the actual geometry
-                cutout_box = rgb.rio.clip_box(*bbox.bounds)
-                cutout = cutout_box.rio.clip([bbox], drop=True)
+                image_box = image.rio.clip_box(*el.geometry.bounds)
+                image_clip = image_box.rio.clip([el.geometry], drop=True)
             except NoDataInBounds:
+                # some polygons may have very small intersections, which
+                # results in an empty array here - we drop these.
                 continue
 
-            img = _to_np_array(cutout)
-
-            # drop large or small cutouts
-            if (
-                _large_image(img, self.max_pixel_size)
-                or _small_image(img, self.min_pixel_size)
-            ):
+            # drop too large and too small cutouts
+            is_too_large = _is_too_large(image_clip, self.max_pixel_size) \
+                if self.max_pixel_size is not None else False
+            is_too_small = _is_too_small(image_clip, self.min_pixel_size) \
+                if self.min_pixel_size is not None else False
+            if is_too_large or is_too_small:
                 continue
 
-            label = self.classes[id]
-            img = _pad_image(img, self.pixel_size)
+            cutout = _pad_image(image_clip, self.pixel_size) \
+                if self.pixel_size is not None else image_clip
 
-            yield id, label, img
+            affine_params = _get_affine_params_dict(cutout.rio.transform())
+            cutout = _to_np_array(cutout)
+
+            yield el.Index, el.label, affine_params, cutout
 
     def get_cutouts(self):
         """
         Load and return cutouts extracted from all images.
 
         Returns:
-            tree_ids: tree IDs, as a np.ndarray with shape
-                (ncutouts,)
-            labels: categorical labels, as a np.ndarray with shape
-                (ncutouts,)
-            imgs: sequence of cutouts, as a np.ndarray with shape
+            labels: labels, as a pd.Series with shape (ncutouts,)
+            affine_params: affine transformation parameters, as a pd.DataFrame
+                with shape (ncutouts, 6). We use the affine naming for the
+                transformation params: https://affine.readthedocs.io/en/latest/
+            crs: coordinate reference system employed, as a pyproj.CRS object.
+            cutouts: sequence of cutouts, as a np.ndarray with shape
                 (ncutouts, ny, nx, 3)
         """
-        tree_ids = []
-        labels = []
-        imgs = []
-        for rgb in self.rgbs:
-            cutouts = self._generate_cutouts_for_image(rgb)
-            for tree_id, label, img in cutouts:
-                tree_ids.append(tree_id)
-                labels.append(label)
-                imgs.append(img)
 
-        tree_ids, labels, imgs = _remove_small_classes(
-            np.asarray(tree_ids),
-            np.asarray(labels),
-            np.stack(imgs),
-            self.min_sample_size
+        results = []
+        for image in self.images:
+            cutout_iter = self._generate_cutouts_for_image(image)
+            results.extend(list(cutout_iter))
+
+        idxs, labels, affine_params, cutouts = list(zip(*results))
+
+        labels = pd.Series(name='label', data=labels, index=idxs)
+        affine_params = pd.DataFrame(data=affine_params, index=idxs)
+        cutouts = np.stack(cutouts)
+
+        labels, affine_params, cutouts = _remove_small_classes(
+            labels, affine_params, cutouts, self.min_sample_size
         )
 
-        if self.augment_data:
-            tree_ids, labels, imgs = _augment_data(
-                tree_ids, labels, imgs
-            )
-
         # convert class labels to categorical values
-        if not np.issubdtype(labels.dtype, np.integer):
+        if self.encode_labels:
             le = LabelEncoder()
             le.fit(labels)
-            labels = le.transform(labels)
-        return tree_ids, labels, imgs
+            labels = pd.Series(
+                name='label', data=le.transform(labels), index=labels.index
+            )
+        return labels, affine_params, self.labels.crs, cutouts
+
+
+def _normalize_geoms(geoms, buffer=None):
+    """
+    Normalize `geoms` accounting for the following possible input types:
+
+    * list of polygons
+    * list of points (with a buffer)
+    * list of bounds
+    * geopandas GeoSeries
+
+    Always return a GeoSeries with polygons
+    """
+    if not isinstance(geoms, gpd.GeoSeries):
+        el = geoms[0]
+        if isinstance(el, shapely.Geometry):
+            geometry = gpd.GeoSeries(geoms)
+        elif len(el) == 2:
+            # (x1, y1), (x2, y2), ...
+            geometry = gpd.GeoSeries.from_xy(*list(zip(*geoms)))
+        elif len(el) == 4:
+            # (minx1, miny1, maxx1, maxy1), (minx2, min2, maxx2, maxy2), ...
+            polygons = [shapely.Polygon.from_bounds(*bb) for bb in geoms]
+            geometry = gpd.GeoSeries(polygons)
+    else:
+        geometry = geoms
+
+    if buffer is not None:
+        geometry = geometry.buffer(buffer)
+
+    if (geometry.geom_type == 'Point').any():
+        raise ValueError(
+            'With Point geometries, the `buffer` parameter must be provided'
+        )
+    return geometry
 
 
 def _to_np_array(data_array):
@@ -149,97 +195,48 @@ def _to_np_array(data_array):
         raise ValueError('Input data shape not understood.')
 
 
-def _remove_small_classes(tree_ids, labels, imgs, min_sample_size):
+def _get_affine_params_dict(transform):
+    """ Extract Affine transform parameters to a dictionary. """
+    return {el: getattr(transform, el) for el in 'abcdef'}
+
+
+def _remove_small_classes(labels, affine_params, cutouts, min_sample_size):
     """
-    Balance class compositions by dropping classes with
-    few samples.
+    Balance class compositions by dropping classes with few samples.
     """
     labels_unique, counts = np.unique(labels, return_counts=True)
     labels_to_keep = labels_unique[counts >= min_sample_size]
     mask = np.isin(labels, labels_to_keep)
     return (
-        tree_ids[mask],
         labels[mask],
-        imgs[mask],
+        affine_params[mask],
+        cutouts[mask],
     )
 
 
-def _large_image(data, max_pixel_size):
-    if max(data.shape[0:2]) > max_pixel_size:
+def _is_too_large(data, max_pixel_size):
+    if max(data.rio.shape) > max_pixel_size:
         return True
     return False
 
 
-def _small_image(data, min_pixel_size):
-    if min(data.shape[0:2]) <= min_pixel_size:
+def _is_too_small(data, min_pixel_size):
+    if min(data.rio.shape) <= min_pixel_size:
         return True
     return False
-
-
-def _flip(img):
-    # horizontal flip
-    return img[::-1, :]
-
-
-def _rotate(img, angle, resize=False):
-    return skimage.transform.rotate(
-        img,
-        angle,
-        resize=resize,
-        mode='constant',
-        cval=0,
-    )
-
-
-def _augment_data(tree_ids, labels, imgs):
-    """
-    Augment data by performing 90 degree rotations and flipping to
-    the images for all classes.
-    """
-    # new_imgs = imgs
-    # new_labels = labels
-    # new_ids = tree_ids
-    tree_ids_add = []
-    labels_add = []
-    imgs_add = []
-    for id, lbl, img in zip(tree_ids, labels, imgs):
-        # Flip and add image
-        flipped_img = _flip(img)
-        imgs_add.append(flipped_img)
-        labels_add.append(lbl)
-        tree_ids_add.append(id)
-
-        # Rotate image by three angles and flip each image
-        for angle in [90, 180, 270]:
-            rotated_image = _rotate(img, angle)
-            imgs_add.append(rotated_image)
-            labels_add.append(lbl)
-            tree_ids_add.append(id)
-            flipped_img = _flip(rotated_image)
-            imgs_add.append(flipped_img)
-            labels_add.append(lbl)
-            tree_ids_add.append(id)
-
-    imgs = np.concatenate([imgs, imgs_add])
-    tree_ids = np.concatenate([tree_ids, tree_ids_add])
-    labels = np.concatenate([labels, labels_add])
-
-    return tree_ids, labels, imgs
 
 
 def _pad_image(data, pixel_size):
     """ Pad each image to shape (pixel_size, pixel_size) """
-    pad_width_x1 = np.floor((pixel_size - data.shape[1])/2).astype(int)
-    pad_width_x2 = pixel_size - data.shape[1] - pad_width_x1
-    pad_width_y1 = np.floor((pixel_size - data.shape[0])/2).astype(int)
-    pad_width_y2 = pixel_size - data.shape[0] - pad_width_y1
-    data = np.pad(
-        data,
-        pad_width=[
-            (pad_width_y1, pad_width_y2),
-            (pad_width_x1, pad_width_x2),
-            (0, 0),
-        ],
-        mode='constant'
+
+    pad_width_1 = (data.rio.width - pixel_size) // 2
+    pad_width_2 = pixel_size - data.rio.width - pad_width_1
+    pad_height_1 = (data.rio.height - pixel_size) // 2
+    pad_height_2 = pixel_size - data.rio.height - pad_height_1
+    padded = data.pad(
+        x=(pad_width_1, pad_width_2),
+        y=(pad_height_1, pad_height_2),
+        mode='constant',
+        constant_values=0,
     )
-    return data
+    return padded.rio.transform(recalc=True)
