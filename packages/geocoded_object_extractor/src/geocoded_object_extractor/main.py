@@ -103,7 +103,9 @@ class ObjectExtractor:
             cutout = _pad_image(image_clip, self.pixel_size) \
                 if self.pixel_size is not None else image_clip
 
-            affine_params = _get_affine_params_dict(cutout.rio.transform())
+            affine_params = _get_affine_params_dict(
+                cutout.rio.transform(recalc=True)  # update after padding
+            )
             cutout = _to_np_array(cutout)
 
             yield el.Index, el.label, affine_params, cutout
@@ -234,10 +236,9 @@ def _pad_image(data, pixel_size):
     pad_width_2 = pixel_size - data.rio.width - pad_width_1
     pad_height_1 = (pixel_size - data.rio.height) // 2
     pad_height_2 = pixel_size - data.rio.height - pad_height_1
-    padded = data.pad(
+    return data.pad(
         x=(pad_width_1, pad_width_2),
         y=(pad_height_1, pad_height_2),
         mode='constant',
         constant_values=0,
     )
-    return padded.rio.transform(recalc=True)
