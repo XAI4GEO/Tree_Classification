@@ -229,9 +229,9 @@ def _is_too_small(data, min_pixel_size):
 def _pad_image(data, pixel_size):
     """ Pad each image to shape (pixel_size, pixel_size) """
 
-    pad_width_1 = (data.rio.width - pixel_size) // 2
+    pad_width_1 = (pixel_size - data.rio.width) // 2
     pad_width_2 = pixel_size - data.rio.width - pad_width_1
-    pad_height_1 = (data.rio.height - pixel_size) // 2
+    pad_height_1 = (pixel_size - data.rio.height) // 2
     pad_height_2 = pixel_size - data.rio.height - pad_height_1
     padded = data.pad(
         x=(pad_width_1, pad_width_2),
