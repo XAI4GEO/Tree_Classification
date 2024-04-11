@@ -133,9 +133,10 @@ class ObjectExtractor:
         affine_params = pd.DataFrame(data=affine_params, index=idxs)
         cutouts = np.stack(cutouts)
 
-        labels, affine_params, cutouts = _remove_small_classes(
-            labels, affine_params, cutouts, self.min_sample_size
-        )
+        if self.min_sample_size is not None:
+            labels, affine_params, cutouts = _remove_small_classes(
+                labels, affine_params, cutouts, self.min_sample_size
+            )
 
         # convert class labels to categorical values
         if self.encode_labels:
