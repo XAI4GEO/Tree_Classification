@@ -53,7 +53,7 @@ class ObjectExtractor:
         self.images = images
         labels = np.zeros(len(geoms), dtype=int) if labels is None else labels
         geometry = _normalize_geoms(geoms, buffer)
-        self.labels = gpd.GeoDataFrame({'label': labels}, geometry=geometry)
+        self.labels = gpd.GeoDataFrame({'label': labels, 'geometry':geometry})
 
         self.min_pixel_size = min_pixel_size
         self.max_pixel_size = max_pixel_size
