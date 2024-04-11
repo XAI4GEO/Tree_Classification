@@ -129,6 +129,7 @@ def _write_cutout(
     da = xr.DataArray(data=data, dims=dims)
     da = da.rio.write_crs(crs)
     da = da.rio.write_transform(transform)
+    da = da.rio.write_nodata(0, encoded=True)
 
     if attrs is not None:
         da = da.rio.set_attrs(attrs)

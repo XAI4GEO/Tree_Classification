@@ -246,6 +246,7 @@ def _pad_data_and_update_transform_params(data, transform, pixel_size):
             (0, 0),
         ],
         mode='constant',
+        constant_values=0,
     )
 
     # determmine new coordinates of top-left corner (c and f params)
