@@ -121,7 +121,7 @@ class ObjectExtractor:
                 transformation params: https://affine.readthedocs.io/en/latest/
             crs: coordinate reference system employed, as a pyproj.CRS object.
             cutouts: sequence of cutouts, as a np.ndarray with shape
-                (ncutouts, ny, nx, 3)
+                (ncutouts, ny, nx, nbands)
         """
 
         results = []
