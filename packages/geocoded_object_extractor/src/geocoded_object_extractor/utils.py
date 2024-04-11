@@ -15,7 +15,7 @@ def augment_data(labels, cutouts):
     Args:
         labels: labels, as a pd.Series with shape (ncutouts,)
         cutouts: sequence of cutouts, as a np.ndarray with shape
-                (ncutouts, ny, nx, 3)
+                (ncutouts, ny, nx, nbands)
 
     Returns:
         labels_aug: labels of the augmented dataset
@@ -32,9 +32,13 @@ def _flip(img):
 
 
 def _rotate(img, angle, resize=False):
+    # for rotation by a multiple of 90 degrees, we actually
+    # don't have to interpolate (order 0), preserving int data types
+    order = 0 if angle in [90, 180, 270] else None
     return skimage.transform.rotate(
         img,
         angle,
+        order=order,
         resize=resize,
         mode='constant',
         cval=0,
