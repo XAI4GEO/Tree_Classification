@@ -66,7 +66,7 @@ class ObjectExtractor:
         """ Extract all cutouts from a given image. """
 
         if not isinstance(image, xr.DataArray):
-            image = rioxarray.open_rasterio(image, masked=True)
+            image = rioxarray.open_rasterio(image)
 
         if self.labels.crs is None:
             # if labels don't have a CRS, assume it's the correct one
@@ -100,15 +100,12 @@ class ObjectExtractor:
             if is_too_large or is_too_small:
                 continue
 
-            cutout = _pad_image(image_clip, self.pixel_size) \
-                if self.pixel_size is not None else image_clip
-
-            affine_params = _get_affine_params_dict(
-                cutout.rio.transform(recalc=True)  # update after padding
+            data = _to_np_array(image_clip)
+            data, transform_params = _pad_data_and_update_transform_params(
+                data, image_clip.rio.transform(), self.pixel_size
             )
-            cutout = _to_np_array(cutout)
 
-            yield el.Index, el.label, affine_params, cutout
+            yield el.Index, el.label, transform_params, data
 
     def get_cutouts(self):
         """
@@ -116,9 +113,10 @@ class ObjectExtractor:
 
         Returns:
             labels: labels, as a pd.Series with shape (ncutouts,)
-            affine_params: affine transformation parameters, as a pd.DataFrame
-                with shape (ncutouts, 6). We use the affine naming for the
-                transformation params: https://affine.readthedocs.io/en/latest/
+            transform_params: affine transformation parameters, as a
+                pd.DataFrame with shape (ncutouts, 6). We use the affine naming
+                for the 2D transformation parameters (a, b, c, d, e, f):
+                https://affine.readthedocs.io/en/latest/
             crs: coordinate reference system employed, as a pyproj.CRS object.
             cutouts: sequence of cutouts, as a np.ndarray with shape
                 (ncutouts, ny, nx, nbands)
@@ -129,15 +127,15 @@ class ObjectExtractor:
             cutout_iter = self._generate_cutouts_for_image(image)
             results.extend(list(cutout_iter))
 
-        idxs, labels, affine_params, cutouts = list(zip(*results))
+        idxs, labels, transform_params, cutouts = list(zip(*results))
 
         labels = pd.Series(name='label', data=labels, index=idxs)
-        affine_params = pd.DataFrame(data=affine_params, index=idxs)
+        transform_params = pd.DataFrame(data=transform_params, index=idxs)
         cutouts = np.stack(cutouts)
 
         if self.min_sample_size is not None:
-            labels, affine_params, cutouts = _remove_small_classes(
-                labels, affine_params, cutouts, self.min_sample_size
+            labels, transform_params, cutouts = _remove_small_classes(
+                labels, transform_params, cutouts, self.min_sample_size
             )
 
         # convert class labels to categorical values
@@ -147,7 +145,7 @@ class ObjectExtractor:
             labels = pd.Series(
                 name='label', data=le.transform(labels), index=labels.index
             )
-        return labels, affine_params, self.labels.crs, cutouts
+        return labels, transform_params, self.labels.crs, cutouts
 
 
 def _normalize_geoms(geoms, buffer=None):
@@ -198,12 +196,12 @@ def _to_np_array(data_array):
         raise ValueError('Input data shape not understood.')
 
 
-def _get_affine_params_dict(transform):
-    """ Extract Affine transform parameters to a dictionary. """
+def _get_transform_params_dict(transform):
+    """ Extract Affine transformation parameters to a dictionary. """
     return {el: getattr(transform, el) for el in 'abcdef'}
 
 
-def _remove_small_classes(labels, affine_params, cutouts, min_sample_size):
+def _remove_small_classes(labels, transform_params, cutouts, min_sample_size):
     """
     Balance class compositions by dropping classes with few samples.
     """
@@ -212,7 +210,7 @@ def _remove_small_classes(labels, affine_params, cutouts, min_sample_size):
     mask = np.isin(labels, labels_to_keep)
     return (
         labels[mask],
-        affine_params[mask],
+        transform_params[mask],
         cutouts[mask],
     )
 
@@ -229,16 +227,29 @@ def _is_too_small(data, min_pixel_size):
     return False
 
 
-def _pad_image(data, pixel_size):
-    """ Pad each image to shape (pixel_size, pixel_size) """
+def _pad_data_and_update_transform_params(data, transform, pixel_size):
+    """
+    Pad data to shape (pixel_size, pixel_size), updating the
+    affine transformation accordingly.
+    """
+    height, width, *_ = data.shape
+    pad_top = (pixel_size - height) // 2
+    pad_bottom = pixel_size - height - pad_top
+    pad_left = (pixel_size - width) // 2
+    pad_right = pixel_size - width - pad_left
 
-    pad_width_1 = (pixel_size - data.rio.width) // 2
-    pad_width_2 = pixel_size - data.rio.width - pad_width_1
-    pad_height_1 = (pixel_size - data.rio.height) // 2
-    pad_height_2 = pixel_size - data.rio.height - pad_height_1
-    return data.pad(
-        x=(pad_width_1, pad_width_2),
-        y=(pad_height_1, pad_height_2),
+    data_pad = np.pad(
+        data,
+        pad_width=[
+            (pad_top, pad_bottom),
+            (pad_left, pad_right),
+            (0, 0),
+        ],
         mode='constant',
-        constant_values=0,
     )
+
+    # determmine new coordinates of top-left corner (c and f params)
+    c_new, f_new = transform * (-pad_left, -pad_top)
+    transform_params = _get_transform_params_dict(transform)
+    transform_params.update(c=c_new, f=f_new)
+    return data_pad, transform_params

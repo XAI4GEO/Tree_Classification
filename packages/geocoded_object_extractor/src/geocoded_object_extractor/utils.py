@@ -75,7 +75,8 @@ def _augment_data(idxs, labels, cutouts):
 
 
 def write_cutouts(
-        cutouts, crs, affine_params, labels=None, outdir='./', overwrite=False
+        cutouts, crs, transform_params, labels=None, outdir='./',
+        overwrite=False
 ):
     """
     Write cutouts extracted using the ObjectExtractor to disk as a set
@@ -84,11 +85,12 @@ def write_cutouts(
 
     Args:
         cutouts: sequence of cutouts, as a np.ndarray with shape
-            (ncutouts, ny, nx, 3)
+            (ncutouts, ny, nx, nbands)
         crs: coordinate reference system employed, as a pyproj.CRS object.
-        affine_params: affine transformation parameters, as a pd.DataFrame
-            with shape (ncutouts, 6). We use the affine naming for the
-            transformation params: https://affine.readthedocs.io/en/latest/
+        transform_params: affine transformation parameters, as a
+            pd.DataFrame with shape (ncutouts, 6). We use the affine naming
+            for the 2D transformation parameters (a, b, c, d, e, f):
+            https://affine.readthedocs.io/en/latest/
         labels (optional): labels, as a pd.Series with shape (ncutouts,)
         outdir (optional): output directory
         overwrite (optional): if files already exist, overwrite them
@@ -96,31 +98,43 @@ def write_cutouts(
     dir = pathlib.Path(outdir)
     dir.mkdir(exist_ok=True, parents=True)
 
-    for nel, params in enumerate(affine_params.itertuples()):
-        path = dir / f'cutout-{nel:05d}.tif'
+    for nel, params in enumerate(transform_params.itertuples()):
+        path = dir / f'cutout-{nel+1:05d}.tif'
         cutout = cutouts[nel]
-        label = labels[params.Index] if labels is not None else None
-        affine_transform = _get_affine_transform_from_params(params)
-        _write_cutout(path, cutout, crs, affine_transform, label, overwrite)
+        transform = _get_transform_from_params(params)
+        attrs = {'ID': params.Index}
+        if labels is not None:
+            attrs['LABEL'] = labels[params.Index]
+        _write_cutout(path, cutout, crs, transform, attrs, overwrite)
 
 
 def _write_cutout(
-        path, cutout, crs, affine_transform, label=None, overwrite=False
+        path, cutout, crs, transform, attrs=None, overwrite=False
 ):
     """ Write out cutout to GeoTIFF. """
-    da = xr.DataArray(data=cutout)
+
+    if cutout.ndim == 3:
+        data = cutout.transpose(2, 0, 1)
+        dims = ('band', 'y', 'x')
+    elif cutout.ndim == 2:
+        data = cutout
+        dims = ('y', 'x')
+    else:
+        raise ValueError('Expected 2 or 3 dimensions for cutouts')
+
+    da = xr.DataArray(data=data, dims=dims)
     da = da.rio.write_crs(crs)
-    da = da.rio.write_transform(affine_transform)
+    da = da.rio.write_transform(transform)
 
-    if label is not None:
-        da = da.rio.set_attrs({'LABEL': label})
+    if attrs is not None:
+        da = da.rio.set_attrs(attrs)
 
-    if path.isfile() and not overwrite:
+    if path.exists() and not overwrite:
         raise FileExistsError(f'{path} already exists. Set overwrite=True')
 
     da.rio.to_raster(path, driver="GTiff", compress="LZW")
 
 
-def _get_affine_transform_from_params(affine_params):
-    kwargs = {p: getattr(affine_params, p) for p in 'abcdef'}
+def _get_transform_from_params(transform_params):
+    kwargs = {p: getattr(transform_params, p) for p in 'abcdef'}
     return affine.Affine(**kwargs)
