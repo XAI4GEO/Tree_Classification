@@ -1,6 +1,8 @@
+import affine
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyproj
 import rioxarray
 import shapely
 import xarray as xr
@@ -53,7 +55,7 @@ class ObjectExtractor:
         self.images = images
         labels = np.zeros(len(geoms), dtype=int) if labels is None else labels
         geometry = _normalize_geoms(geoms, buffer)
-        self.labels = gpd.GeoDataFrame({'label': labels, 'geometry':geometry})
+        self.labels = gpd.GeoDataFrame({'label': labels, 'geometry': geometry})
 
         self.min_pixel_size = min_pixel_size
         self.max_pixel_size = max_pixel_size
@@ -62,21 +64,31 @@ class ObjectExtractor:
 
         self.encode_labels = encode_labels
 
+        self.crs = None
+
     def _generate_cutouts_for_image(self, image):
         """ Extract all cutouts from a given image. """
 
         if not isinstance(image, xr.DataArray):
             image = rioxarray.open_rasterio(image)
 
-        if self.labels.crs is None:
-            # if labels don't have a CRS, assume it's the correct one
-            self.labels.set_crs(image.rio.crs)
+        # check CRSs are consistent
+        if self.crs is None:
+            self.crs = pyproj.CRS.from_wkt(image.rio.crs.to_wkt())
         else:
-            assert self.labels.crs == image.rio.crs
+            # all rasters must have the same CRS
+            assert self.crs == image.rio.crs
+        labels = self.labels
+        if labels.crs is None:
+            # if labels don't have a CRS, assume it's the correct one
+            labels = labels.set_crs(self.crs)
+        else:
+            # vector and rasters must have the same CRS
+            assert labels.crs == self.crs
 
         # select relevant objects
         xmin, ymin, xmax, ymax = image.rio.bounds()
-        labels_clip = self.labels.cx[xmin:xmax, ymin:ymax]
+        labels_clip = labels.cx[xmin:xmax, ymin:ymax]
         labels_clip = labels_clip[~labels_clip.is_empty]
 
         for el in labels_clip.itertuples():
@@ -101,11 +113,8 @@ class ObjectExtractor:
                 continue
 
             data = _to_np_array(image_clip)
-            data, transform_params = _pad_data_and_update_transform_params(
-                data, image_clip.rio.transform(), self.pixel_size
-            )
 
-            yield el.Index, el.label, transform_params, data
+            yield el.Index, el.label, image_clip.rio.transform(), data
 
     def get_cutouts(self):
         """
@@ -127,25 +136,36 @@ class ObjectExtractor:
             cutout_iter = self._generate_cutouts_for_image(image)
             results.extend(list(cutout_iter))
 
-        idxs, labels, transform_params, cutouts = list(zip(*results))
+        idxs, labels, transforms, cutout_list = list(zip(*results))
 
-        labels = pd.Series(name='label', data=labels, index=idxs)
-        transform_params = pd.DataFrame(data=transform_params, index=idxs)
-        cutouts = np.stack(cutouts)
+        idxs = np.array(idxs)
+        labels = np.array(labels)
+        transforms = np.array(transforms)
+        # cutouts have different shapes so far!
+        cutouts = np.empty(len(cutout_list), dtype=object)
+        cutouts[:] = cutout_list[:]
 
         if self.min_sample_size is not None:
-            labels, transform_params, cutouts = _remove_small_classes(
-                labels, transform_params, cutouts, self.min_sample_size
+            idxs, labels, transforms, cutouts = _remove_small_classes(
+                idxs, labels, transforms, cutouts, self.min_sample_size
             )
 
-        # convert class labels to categorical values
+        idxs, labels, transforms, cutouts = _drop_duplicates(
+            idxs, labels, transforms, cutouts
+        )
+
         if self.encode_labels:
-            le = LabelEncoder()
-            le.fit(labels)
-            labels = pd.Series(
-                name='label', data=le.transform(labels), index=labels.index
-            )
-        return labels, transform_params, self.labels.crs, cutouts
+            labels = _encode_labels(labels)
+
+        transforms, cutouts = _pad_data_and_stack(
+            transforms, cutouts, self.pixel_size
+        )
+
+        labels = pd.Series(name='label', data=labels, index=idxs)
+        transform_params = pd.DataFrame(
+            data=transforms, columns=list('abcdefghi'), index=idxs
+        )
+        return labels, transform_params, self.crs, cutouts
 
 
 def _normalize_geoms(geoms, buffer=None):
@@ -196,12 +216,9 @@ def _to_np_array(data_array):
         raise ValueError('Input data shape not understood.')
 
 
-def _get_transform_params_dict(transform):
-    """ Extract Affine transformation parameters to a dictionary. """
-    return {el: getattr(transform, el) for el in 'abcdef'}
-
-
-def _remove_small_classes(labels, transform_params, cutouts, min_sample_size):
+def _remove_small_classes(
+        idxs, labels, transforms, cutouts, min_sample_size
+):
     """
     Balance class compositions by dropping classes with few samples.
     """
@@ -209,8 +226,9 @@ def _remove_small_classes(labels, transform_params, cutouts, min_sample_size):
     labels_to_keep = labels_unique[counts >= min_sample_size]
     mask = np.isin(labels, labels_to_keep)
     return (
+        idxs[mask],
         labels[mask],
-        transform_params[mask],
+        transforms[mask],
         cutouts[mask],
     )
 
@@ -227,7 +245,25 @@ def _is_too_small(data, min_pixel_size):
     return False
 
 
-def _pad_data_and_update_transform_params(data, transform, pixel_size):
+def _drop_duplicates(idxs, labels, transforms, cutouts):
+    """ Drop elements with the same indices """
+    idxs_unique, counts = np.unique(idxs, return_counts=True)
+    mask = np.ones(len(idxs), dtype=bool)
+    for idx in idxs_unique[counts > 1]:
+        duplicates, = np.nonzero(idxs == idx)
+        # among the cutouts with duplicate idx, keep the largest
+        to_keep = np.argmax([c.shape[0]*c.shape[1] for c in cutouts])
+        mask[duplicates] = False
+        mask[duplicates[to_keep]] = True
+    return (
+        idxs[mask],
+        labels[mask],
+        transforms[mask],
+        cutouts[mask],
+    )
+
+
+def _pad_data_and_update_transform(data, transform, pixel_size):
     """
     Pad data to shape (pixel_size, pixel_size), updating the
     affine transformation accordingly.
@@ -249,8 +285,35 @@ def _pad_data_and_update_transform_params(data, transform, pixel_size):
         constant_values=0,
     )
 
-    # determmine new coordinates of top-left corner (c and f params)
-    c_new, f_new = transform * (-pad_left, -pad_top)
-    transform_params = _get_transform_params_dict(transform)
-    transform_params.update(c=c_new, f=f_new)
-    return data_pad, transform_params
+    # determine new coordinates of top-left corner (c and f params)
+    c_pad, f_pad = affine.Affine(*transform) * (-pad_left, -pad_top)
+    transform_pad = transform
+    transform_pad[2] = c_pad
+    transform_pad[5] = f_pad
+    return data_pad, transform_pad
+
+
+def _pad_data_and_stack(transforms, cutouts, pixel_size=None):
+    if pixel_size is None:
+        pixel_size = max(max(*c.shape) for c in cutouts)
+
+    cutout_ = cutouts[0]
+    cutouts_pad = np.zeros(
+        (len(cutouts), pixel_size, pixel_size, cutout_.shape[-1]),
+        dtype=cutout_.dtype
+    )
+    transforms_pad = np.zeros_like(transforms)
+    for ncutout, (transform, cutout) in enumerate(zip(transforms, cutouts)):
+        cutout_pad, transform_pad = _pad_data_and_update_transform(
+            cutout, transform, pixel_size
+        )
+        cutouts_pad[ncutout, ...] = cutout_pad[...]
+        transforms_pad[ncutout] = transform_pad[:]
+    return transforms_pad, cutouts_pad
+
+
+def _encode_labels(labels):
+    """ Convert class labels to categorical (numeric) values """
+    le = LabelEncoder()
+    le.fit(labels)
+    return le.transform(labels)
