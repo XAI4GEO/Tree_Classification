@@ -141,5 +141,5 @@ def _write_cutout(
 
 
 def _get_transform_from_params(transform_params):
-    kwargs = {p: getattr(transform_params, p) for p in 'abcdef'}
+    kwargs = {p: getattr(transform_params, p) for p in 'abcdefghi'}
     return affine.Affine(**kwargs)
