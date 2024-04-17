@@ -6,6 +6,7 @@ This repository contains the workflow for tree-species similarity classification
 
 - `notebooks`: Jupyter notebooks for the workflow.
 - `optimal_models`: Optimized Siamese network model and feature extraction model for the workflow.
+- [`packages`](./packages): Python tools that are used across the project. 
 
 ## Setup
 
