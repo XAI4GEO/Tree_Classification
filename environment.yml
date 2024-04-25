@@ -3,6 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - keras 
+  - dask
   - deepforest
   - geopandas
   - jupyterlab
