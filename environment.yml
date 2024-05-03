@@ -2,6 +2,7 @@ name: tree-classification
 channels:
   - conda-forge
 dependencies:
+  - python>=3.10
   - keras 
   - dask
   - deepforest
