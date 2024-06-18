@@ -1,0 +1,10 @@
+{
+    "_ARRAY_DIMENSIONS": [
+        "sample",
+        "x",
+        "y",
+        "channel"
+    ],
+    "add_offset": 0.0,
+    "scale_factor": 1.0
+}
