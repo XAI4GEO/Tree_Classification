@@ -8,6 +8,18 @@ import skimage.transform
 import xarray as xr
 
 
+
+def hash_classname(species_name, range_limit=1e12):
+    """
+    Hash a class name to an integer value.
+
+    Args:
+        species_name: class name
+        range_limit: upper limit of the hash value
+    """
+
+    return int(abs(hash(species_name)) % range_limit)
+
 def augment_data(labels, cutouts):
     """
     Augment data by rotation (90, 180 and 270 degrees) and mirroring.
