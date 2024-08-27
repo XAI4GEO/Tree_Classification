@@ -72,9 +72,16 @@ class ObjectExtractor:
         if not isinstance(image, xr.DataArray):
             image = rioxarray.open_rasterio(image)
 
+        # If the image has no CRS, assume it's WGS84.
+        # This is an assumption made of pure raster, such as png data.
+        # It is okay of no georeferencing based computation, such as distance
+        if image.rio.crs is None:
+                image = image.rio.write_crs('4326')
+
         # check CRSs are consistent
         if self.crs is None:
-            self.crs = pyproj.CRS.from_wkt(image.rio.crs.to_wkt())
+            if image.rio.crs is not None:
+                self.crs = pyproj.CRS.from_wkt(image.rio.crs.to_wkt())
         else:
             # all rasters must have the same CRS
             assert self.crs == image.rio.crs
@@ -252,9 +259,10 @@ def _drop_duplicates(idxs, labels, transforms, cutouts):
     for idx in idxs_unique[counts > 1]:
         duplicates, = np.nonzero(idxs == idx)
         # among the cutouts with duplicate idx, keep the largest
-        to_keep = np.argmax([c.shape[0]*c.shape[1] for c in cutouts])
+        # to_keep = np.argmax([c.shape[0]*c.shape[1] for c in cutouts[duplicates]])
+        # among the cutouts with duplicate idx, keep the first
         mask[duplicates] = False
-        mask[duplicates[to_keep]] = True
+        mask[duplicates[0]] = True
     return (
         idxs[mask],
         labels[mask],
