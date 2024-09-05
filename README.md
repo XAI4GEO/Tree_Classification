@@ -4,7 +4,7 @@ This repository contains the workflow for tree-species similarity classification
 
 ## Repository structure
 
-- `notebooks`: Jupyter notebooks for the workflow.
+- `notebooks`: Jupyter notebooks of the workflow.
 - `optimal_models`: Optimized Siamese network model and feature extraction model for the workflow.
 - [`packages`](./packages): Python tools that are used across the project. 
 
@@ -16,6 +16,8 @@ The Python environment for the workflow can be set up using the `environment.yml
 mamba env create -f environment.yml
 ```
 
-## Data used to train the Siamese model
+## Data and tools used to train the Siamese model
+
+The [Netflora workflow](https://github.com/NetFlora/Netflora) is used to generate part of the training dataset.
 
 The [ReforesTree](https://github.com/gyrrei/ReforesTree) dataset is used to train the Siamese model.
