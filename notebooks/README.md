@@ -1,13 +1,13 @@
-# Classification workflow
+# Research workflow: Explainable few-shot learning workflow for detecting invasive and exotic tree species
 
-## Step 0 prepare datasets
-In folder `step0_data_preparation_examples`, there are examples of how to make cutouts from different sources, clean the data, and make pairs for training the Siamese network. This step takes online open datasets and generates the `data` folder, which is the assumed input for the classification workflow.
+This repository contains the code and data for the research work "Explainable few-shot learning workflow for detecting invasive and exotic tree species".
 
-## Step 1 classification
-In the notebook `step1_classification.ipynb`, an example of classify an example image based on Siamese network and benchmark data with known classes is provided.
+There are three components in this repository:
 
-## Step 2 explainability
-In the notebook `step2_explaination.ipynb`, an example of how to explain the classification result is provided.
+- `data_prepapration`: This folder contains the code for preparing the data for the research work, including getting candidate image cutouts, data cleaning, and generate training pairs.
 
-## Step 3 accuracy assessment
-In the notebook `step3_accuracy_evaluation.ipynb`, an example of assessing the accuracy of the classification result is provided. We performed classification for all the benchmark data and assess the accuracy of each benchmark class.
+- `training`: This folder contains the code for training the based model and the refinement model.
+
+- `XAI`: This folder contains the code for testing the performance of the optimized model, and explaining the performance of the model.
+
+The data used in this research work is vailabel on Zenodo, with DOI: [10.5281/zenodo.13380285](https://zenodo.org/doi/10.5281/zenodo.13380285)
