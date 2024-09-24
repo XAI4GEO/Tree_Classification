@@ -9,3 +9,5 @@ There are three components in this repository:
 - `training`: This folder contains the code for training the based model and the refinement model.
 
 - `XAI`: This folder contains the code for testing the performance of the optimized model, and explaining the performance of the model.
+
+The data used in this research work is vailabel on Zenodo, with DOI: [10.5281/zenodo.13380285](https://zenodo.org/doi/10.5281/zenodo.13380285)
