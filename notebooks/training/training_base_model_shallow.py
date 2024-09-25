@@ -1,3 +1,8 @@
+"""Script training the base Siamese model.
+This is the training of a shallow base model.
+Training data avaialbel at: https://zenodo.org/records/13833791/files/training_pairs_20000.zarr.zip?download=1
+"""
+
 # Import libraries
 import keras
 import tensorflow as tf
@@ -175,7 +180,7 @@ if __name__ == "__main__":
     npool = [2, 2, 2, 2]
     lr_init = 0.25e-04 # initial learning rate
 
-    data = xr.open_zarr("../../../data/cleaned/traing_pairs_balanced.zarr")
+    data = xr.open_zarr("../data/training_pairs_20000.zarr")
     images_pair = data["X"].to_numpy()
     labels_pair = data["Y"].to_numpy()
 
