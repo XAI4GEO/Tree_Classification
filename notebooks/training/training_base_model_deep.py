@@ -1,3 +1,7 @@
+"""Script training the base Siamese model.
+This is the training of a deep base model. We use the MobileNet as backbone.
+Training data avaialbel at: https://zenodo.org/records/13833791/files/training_pairs_20000.zarr.zip?download=1
+"""
 # Import libraries
 import keras
 import tensorflow as tf
@@ -31,10 +35,11 @@ from tensorflow.keras.models import save_model
 
 rng = np.random.default_rng(seed=42)
 
+os.chdir('/data/Projects/2024_Invasive_species/Tree_Classification')
+print(os.getcwd())
+
 
 class TrainingAugmentationLayers(keras.layers.Layer):
-    # def __init__(self):
-    #     super().__init__()
         
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -64,13 +69,6 @@ class TrainingAugmentationLayers(keras.layers.Layer):
         return x
     
     
-# data_augmentation = tf.keras.Sequential([
-#     RandomFlip("horizontal_and_vertical"),
-#     RandomRotation(0.2),
-#     RandomZoom(0.2)
-# ])
-
-
 # use backbones modle
 def _backbone_model(nneurons, inputshape, backbone="mobilenet"):
     inputs = keras.Input(shape=inputshape,name = 'image_input')
@@ -122,6 +120,7 @@ def _create_model(nneurons, nfilters, ndropout, npool):
     print(model.summary())
     return model
 
+
 @keras.saving.register_keras_serializable(package="MyLayers")
 class euclidean_lambda(keras.layers.Layer):
     def __init__(self, **kwargs):
@@ -131,12 +130,15 @@ class euclidean_lambda(keras.layers.Layer):
     def call(self, featA, featB):
         squared = keras.ops.square(featA-featB)
         return squared
+    
 
-def siamese_model(nneurons, nfilters, ndropout, npool):
-    # feature_extractor_model = _create_model(nneurons, nfilters, ndropout, npool)
+def siamese_model(nneurons, nfilters, ndropout, npool, backnone="CNN"):
     inputshape = (128, 128, 3)
-    # change the backbone to one of these: "mobilenet", "resnet50", "vgg16"
-    feature_extractor_model = _backbone_model(nneurons, inputshape, backbone="mobilenet")
+    if backnone == "CNN":
+        feature_extractor_model = _create_model(nneurons, nfilters, ndropout, npool)
+    else:
+        feature_extractor_model = _backbone_model(nneurons, inputshape, backbone="mobilenet")
+  
     imgA = keras.Input(shape=inputshape)
     imgB = keras.Input(shape=inputshape)
     
@@ -199,6 +201,7 @@ def plot_prediction_hist(labels_pred):
     sub = fig.add_subplot(1, 2, 2)
     counts, bins = np.histogram(labels_pred[labels_pair==0])
     sub.stairs(counts, bins)
+    
 
 def lr_schedule(epoch):
         if epoch<=10:
@@ -209,6 +212,7 @@ def lr_schedule(epoch):
             return 0.00005
         else:
             return 0.00001
+        
         
 # Custom callback to plot predictions every 10 epochs
 class PlotPredictionsCallback(Callback):
@@ -235,20 +239,6 @@ class PlotPredictionsCallback(Callback):
             plt.savefig(dir_epoch/'prediction_hist.png')
             plt.close('all')
 
-# class LoadHistoryCallback(Callback):
-#     def __init__(self, pickle_file):
-#         super(LoadHistoryCallback, self).__init__()
-#         self.pickle_file = pickle_file
-
-#     def on_train_begin(self, logs=None):
-#         with open(self.pickle_file, 'rb') as f:
-#             self.history = pickle.load(f)
-
-#     def on_epoch_end(self, epoch, logs=None):
-#         for key in self.history.history.keys():
-#             if key in logs:
-#                 logs[key] = self.history.history[key][:]
-
             
 if __name__ == "__main__":
     
@@ -259,32 +249,26 @@ if __name__ == "__main__":
     ndropout = [0.4]
     npool = [2, 2, 2, 2]
     lr_init = 0.25e-04 # initial learning rate
-
-    # data = xr.open_zarr("/data/Projects/2024_Invasive_species/Tree_Classification/notebooks/step0_data_preparation_examples/traing_pairs_balanced.zarr")
-    # data = xr.open_zarr("/data/Projects/2024_Invasive_species/Tree_Classification/notebooks/step0_data_preparation_examples/training_pairs_agu.zarr")
-    data = xr.open_zarr("/data/Projects/2024_Invasive_species/Tree_Classification/notebooks/step0_data_preparation_examples/training_pairs_20000.zarr")
     
-    # ### select 20000 pairs to avoid memory problem
-    # NN = max(data.sizes["sample"], 20000)
-    # idx_select = rng.integers(0, data.sizes["sample"], size=NN)
-    # data = data.isel(sample=idx_select, drop=True)    
-    
-    images_pair = data["X"].to_numpy()
-    labels_pair = data["Y"].to_numpy()
-
-    # Scale to [0, 1]
-    images_pair = images_pair/255.
-
-    model = siamese_model(nneurons, nfilters, ndropout, npool)
+    # change the backbone to one of these: "CNN", "mobilenet", "resnet50", "vgg16"
+    # except CNN is trained from scratch, the other backbones are pre-trained using ImageNet
+    backbone = "CNN"
+    model = siamese_model(nneurons, nfilters, ndropout, npool, backbone)       
 
     #Compile model
     metrics = [keras.metrics.BinaryAccuracy(threshold=0.5)]    
     opt = keras.optimizers.Adam(learning_rate=lr_init)
     loss = keras.losses.BinaryCrossentropy(from_logits=False)
     model.compile(loss=loss, optimizer=opt, metrics=metrics)
+    
+    data = xr.open_zarr("./notebooks/step0_data_preparation_examples/training_pairs_20000.zarr")    
+    images_pair = data["X"].to_numpy()
+    labels_pair = data["Y"].to_numpy()
+    # Scale to [0, 1]
+    images_pair = images_pair/255.
 
     # Configure training    
-    dir_training = Path("/data/Projects/2024_Invasive_species/Tree_Classification/optimized_models/results_training/") / train_name
+    dir_training = Path("./optimized_models/results_training/") / train_name
     dir_training.mkdir(exist_ok=True)
 
     # Set callbacks
