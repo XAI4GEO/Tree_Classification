@@ -9,6 +9,7 @@ dependencies:
   - jupyterlab
   - laspy
   - matplotlib
+  - seaborn
   - rioxarray
   - scikit-image
   - zarr
